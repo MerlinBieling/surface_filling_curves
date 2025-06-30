@@ -1,0 +1,56 @@
+import numpy as np
+
+import SurfacePoint_mod
+
+
+###########################################################################
+# Content: 
+# The central function in this file is "surface_point_value". 
+# Functionality: 
+# Given a mapping that assigns to every vertex of a mesh a tangent vector
+# and a point anywhere on the surface of the mesh,
+# this function will return an interpolated tangent vector for that surface point. (linear interpolation)
+# Application: 
+# The function is used to assign a  tangent vector to any point on the surface.
+# It is thus used for the vector field aligment.
+# Note: 
+# Its the exact same function as surface_point_value.
+###########################################################################
+
+
+def surface_point_vector_field(tri_mesh, mapping: np.ndarray, sp: SurfacePoint_mod):
+    """
+
+    mapping: np.ndarray of shape (n_vertices,) or (n_vertices, d) for vector values
+    sp: SurfacePoint instance
+    Returns: interpolated value at surface point (scalar or vector)
+    """
+    # Ensure per-vertex data matches tr_mesh
+    assert mapping.shape[0] == tri_mesh.vertices.shape[0]
+
+    if sp.type == 'vertex':
+        # Direct lookup
+        v = sp.top_indices[0]
+        return mapping[v]
+
+    elif sp.type == 'edge':
+        # Edge interpolation: top_indices holds [v0, v1]
+        
+        t, v1 = sp.t
+        # sp.top_indices is [v0, v1], so find v0 as the other vertex
+        v0 = sp.top_indices[0] if sp.top_indices[1] == v1 else sp.top_indices[1]
+        r0 = mapping[v0]
+        r1 = mapping[v1]
+        return (1 - t) * r0 + t * r1 # THIS MIGHT BE ASSIGNED WRONGLY!!!!
+
+    elif sp.type == 'face':
+        # Face interpolation via barycentric coords
+        v0, v1, v2 = sp.top_indices
+        bary = sp.bary  # (u, v, w)
+        r0 = mapping[v0]
+        r1 = mapping[v1]
+        r2 = mapping[v2]
+        return bary[0] * r0 + bary[1] * r1 + bary[2] * r2
+
+    else:
+        raise ValueError(f"Unknown SurfacePoint type: {sp.type}")
