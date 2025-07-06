@@ -20,6 +20,41 @@ from sharedFace_mod import sharedFace
 # We need this in the formulation of our Medial-Axis Energy term. 
 ###########################################################################
 
+def bary(P, A, B, C):
+    """
+    Compute barycentric coordinates (u, v, w) for point P with respect to triangle ABC.
+    
+    Parameters:
+        P, A, B, C: numpy arrays or lists of shape (3,) representing 3D coordinates.
+
+    Returns:
+        (u, v, w): tuple of barycentric coordinates such that P = u*A + v*B + w*C and u+v+w = 1
+    """
+    A = np.array(A)
+    B = np.array(B)
+    C = np.array(C)
+    P = np.array(P)
+
+    v0 = B - A
+    v1 = C - A
+    v2 = P - A
+
+    d00 = np.dot(v0, v0)
+    d01 = np.dot(v0, v1)
+    d11 = np.dot(v1, v1)
+    d20 = np.dot(v2, v0)
+    d21 = np.dot(v2, v1)
+
+    denom = d00 * d11 - d01 * d01
+    if denom == 0:
+        raise ValueError("The triangle is degenerate.")
+
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+
+    return (u, v, w)
+
 
 # === Maximum Euclidean Ball Radius ===
 def maximumBallRadius(x, b, i, maxRadius, cartesianCoords, kdtree):
@@ -118,15 +153,25 @@ def cutTracePath(tri_mesh, path, cartesianPath, _length):
 
             face = sharedFace(path[j - 1], path[j], tri_mesh)
 
-            vec0 = path[j - 1].coord3d
-            vec1 = path[j].coord3d
+            A, B, C = [tri_mesh.vertices[i] for i in tri_mesh.faces[face]]
 
-            point = [(0.5) * v0 + 0.5 * v1 for v0, v1 in zip(vec0, vec1)]
+            if path[j - 1].face_index == face:
+                vec0 = path[j-1].bary
+            else:
+                vec0 = bary(path[j-1].coord3d, A, B, C)
 
-            
-            sp = SurfacePoint.from_position(point, tri_mesh, tolerance=1e-6)
+            # Now the second point...
 
-            tracePath.append(sp)
+            if path[j].face_index == face:
+                vec1 = path[j].bary
+            else:
+                vec1 = bary(path[j].coord3d, A, B, C)
+
+            bary = (vec0 * (1 - ratio) + vec1 * ratio)
+            nsp = SurfacePoint.from_barycentric(face, bary, tri_mesh, tolerance=1e-6)
+            #print(nsp)
+
+            tracePath.append(nsp)
             break
 
         if j == len(path) - 1:

@@ -10,7 +10,7 @@ def doWork(
     maxRadius, radius,
     useAnisotropicAlphaOnNodes, useAnisotropicAlphaOnMesh,
     alphaRatioOnNodes, alphaRatioOnMesh,
-    w_fieldAlignedness, w_bilaplacian,
+    w_fieldAlignedness, w_curvatureAlignedness, w_biharmonic,
     p, q
 ):
     
@@ -34,13 +34,15 @@ def doWork(
         alphaRatioOnMesh,
         vectorField,
         w_fieldAlignedness,
-        w_bilaplacian, #change this name to biharmonic
+        w_curvatureAlignedness,
+        w_biharmonic,
         p,
         q
-    )
+        )
 
     #print ('This is the direction:',d)
 
+    
     '''
     nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode, retractionPaths = surface_path_evolution(
         tri_mesh,
@@ -70,5 +72,6 @@ def doWork(
         "medialAxis": medialAxis
     }
     '''
+    
 
     return d, g, f, medialAxis

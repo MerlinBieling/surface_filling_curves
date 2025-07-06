@@ -9,6 +9,7 @@ from get_tangent_basis_mod import get_tangent_basis
 from surface_point_vector_field_mod import surface_point_vector_field
 from medial_axis_mod import medial_axis
 from surface_point_value_mod import surface_point_value
+from surface_point_tangent_basis_mod import surface_point_tangent_basis
 
 
 ###########################################################################
@@ -30,6 +31,116 @@ from surface_point_value_mod import surface_point_value
 # and Newton descent direction to guide the optimization of node positions 
 # on the surface.
 ###########################################################################
+
+tol = 1e-6
+
+def populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(activeNode2NodeIdx, node2ActiveNodeIdx, nodes, isFixedNode):
+    # populating those lists
+    for i in range(len(nodes)):
+        if not isFixedNode[i]:
+            active_index = len(activeNode2NodeIdx)
+            activeNode2NodeIdx[active_index] = i
+            node2ActiveNodeIdx[i] = len(node2ActiveNodeIdx)
+
+def get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh, segmentTangent, segmentNormal, segmentBitangent, rotationMatrix):
+
+    for i in range(len(segments)):    
+    # Build full list of SurfacePoints on the segment
+        pointsOnSegment = [nodes[segments[i][0]]]  # Start node
+        for sp in segmentSurfacePoints[i]:
+            pointsOnSegment.append(sp)             # Interior segment points
+        pointsOnSegment.append(nodes[segments[i][1]])  # End node
+
+        # Convert SurfacePoints to 3D coordinates (as numpy arrays)
+        _edgeCartesians = [sp.coord3d for sp in pointsOnSegment]
+
+        # Filter out points that are too close (to remove duplicates)
+        edgeCartesians = [_edgeCartesians[0]]
+        for j in range(1, len(_edgeCartesians)):
+            prev = edgeCartesians[-1]
+            dist = np.linalg.norm(_edgeCartesians[j] - prev)
+            #print('These points have distance', dist)
+            if dist > tol:
+                edgeCartesians.append(_edgeCartesians[j])
+        # Ensure at least two points exist
+        if len(edgeCartesians) == 1:
+            edgeCartesians.append(_edgeCartesians[-1])
+
+        assert len(edgeCartesians) > 1
+
+        ##################################
+
+        # Compute tangents
+        #print(edgeCartesians[1], edgeCartesians[0], edgeCartesians[-1],edgeCartesians[-2])
+        tangents = [edgeCartesians[1] - edgeCartesians[0],edgeCartesians[-1] - edgeCartesians[-2]]
+
+        tangents = [t / np.linalg.norm(t) for t in tangents]  # normalize
+
+        for j in range(2):
+            v = segments[i][j]
+            sp = nodes[v]
+
+            # Get local tangent basis: (x, y, z)
+            x,y,z = surface_point_tangent_basis(tri_mesh, sp)   
+
+            # Project tangent onto local tangent plane basis
+            
+            t_proj = np.dot(x, tangents[j]) * x + np.dot(y, tangents[j]) * y
+            t_proj *= 1 / np.linalg.norm(t_proj)
+            tangent_projected = t_proj
+            # Bitangent is orthogonal to both tangent and normal
+            #print(z,tangent_projected)
+            bitangent_projected = np.cross(z, tangent_projected)
+
+            # Store results
+            segmentTangent[i][j] = tangent_projected
+            segmentNormal[i][j] = z
+            segmentBitangent[i][j] = bitangent_projected
+
+            # Build rotation matrix with columns [tangent, bitangent, normal]
+            R = np.column_stack((tangent_projected, bitangent_projected, z))
+            rotationMatrix[i][j] = R
+
+def populate_segments_lists(segments, isFixedNode, segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns):
+
+    # Classify segments
+    for i in range(len(segments)):
+        v0, v1 = segments[i]
+
+        if isFixedNode[v0] and isFixedNode[v1]: # Both endpoints fixed -> ignore
+            continue
+        elif not isFixedNode[v0] and not isFixedNode[v1]: # Both endpoints loose
+            segmentsWith2ActiveNodes.append((v0, v1))
+            activeTwoSegment2SegmentIdx.append(i)
+        else: # Only one fixed
+            activeNode = v1 if isFixedNode[v0] else v0
+            fixedNode = v0 if isFixedNode[v0] else v1
+            segmentsWith1ActiveNode.append((activeNode, fixedNode))
+            activeOneSegment2SegmentIdx.append(i)
+            activeOneSegmentSigns.append(-1 if isFixedNode[v0] else 1)
+
+def populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tri_mesh, vectorField):
+    vectorFieldOnNode = []
+    if w_fieldAlignedness > 0:
+        for i, node in enumerate(nodes):
+            vf = surface_point_vector_field(tri_mesh, vectorField, node)
+            vectorFieldOnNode.append(vf)
+
+    curvature_field = np.array([
+    tri_mesh.principal_directions[i][0]
+    for i in range(len(tri_mesh.vertices))])
+
+    principalCurvatureOnNode = []
+    if w_curvatureAlignedness > 0:
+        for i, node in enumerate(nodes):
+            # THESE OPTIONS STILL NEED TO BE REPLACED 
+            vf = surface_point_vector_field(tri_mesh, curvature_field, node)
+            principalCurvatureOnNode.append(vf) 
+    
+    print('BEGINNING',principalCurvatureOnNode, 'ENDING')
+
+    return vectorFieldOnNode, principalCurvatureOnNode
+
 
 # Dont be spooked by this function. A lot of components come together on this one.
 
@@ -63,7 +174,7 @@ def surface_filling_energy_geodesic(
 
     # Different weights to set the influence of the different energy terms:
     w_fieldAlignedness,            # weight for field-alignedness energy component
-    #w_curvatureAlignedness,        # weight for curvature-alignedness energy component
+    w_curvatureAlignedness,        # weight for curvature-alignedness energy component
     w_bilaplacian,                 # weight for bilaplacian (second-derivative smoothing) energy component
 
     p,                             # is used as power to the Shortest curve energy term
@@ -86,83 +197,30 @@ def surface_filling_energy_geodesic(
     branch_radius = radius * branch_ratio
     alpha = 4 / (branch_radius ** 2)
 
+    tolerance = 1e-6
+
+
     rotationMatrix = [ [np.eye(3), np.eye(3)] for _ in range(len(segments)) ]
     segmentTangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
     segmentNormal = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
     segmentBitangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
 
-    total_curve_length = sum(segmentLengths)
+    assert len(nodes) == len(isFixedNode), "Mismatch: nodes and isFixedNode must be the same length"
+    assert len(nodes) == len(cartesianCoords), "Mismatch: nodes and cartesianCoords must be the same length"
 
-    for i in range(len(segments)):    
-        # Build full list of SurfacePoints on the segment
-        pointsOnSegment = [nodes[segments[i][0]]]  # Start node
-        for sp in segmentSurfacePoints[i]:
-            pointsOnSegment.append(sp)             # Interior segment points
-        pointsOnSegment.append(nodes[segments[i][1]])  # End node
+    # Just two maps to map back and forth between the list of active nodes and "nodes"
+    activeNode2NodeIdx = {} 
+    node2ActiveNodeIdx = {}
+    populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(activeNode2NodeIdx, node2ActiveNodeIdx, nodes, isFixedNode)
 
-        # Convert SurfacePoints to 3D coordinates (as numpy arrays)
-        _edgeCartesians = [sp.coord3d for sp in pointsOnSegment]
+    
 
-        # Filter out points that are too close (to remove duplicates)
-        # THIS MIGHT NOT FUNCTION SO WELL!!!!!
-        edgeCartesians = [_edgeCartesians[0]]
-        for j in range(1, len(_edgeCartesians)):
-            prev = edgeCartesians[-1]
-            if np.linalg.norm(_edgeCartesians[j] - prev) > 1e-6:
-                edgeCartesians.append(_edgeCartesians[j])
+    # Getting the length of all the curves to later be able to 
+    # give weight to segements according to their relative length
+    totalCurveLength = sum(segmentLengths)
 
-            #print(_edgeCartesians[j])
-            #print('------------------------')
-        # Ensure at least two points exist
-        if len(edgeCartesians) == 1:
-            edgeCartesians.append(_edgeCartesians[-1])
-
-        assert len(edgeCartesians) > 1
-
-        ##################################
-
-        # Compute tangents
-        #print(edgeCartesians[1], edgeCartesians[0], edgeCartesians[-1],edgeCartesians[-2])
-        tangents = [(edgeCartesians[1] - edgeCartesians[0]),(edgeCartesians[-1] - edgeCartesians[-2])]
-
-        tangents = [t / np.linalg.norm(t) for t in tangents]  # normalize
-
-        for j in range(2):
-            v = segments[i][j]
-            sp = nodes[v]
-
-            # Get local tangent basis: (x, y, z)
-            x,y,z = get_tangent_basis(tri_mesh, sp)   
-
-            # Project tangent onto local tangent plane basis
-            
-            # THERE MIGHT BE A MISTAKE HERE!
-            
-            '''
-            if sp.type != 'face':
-                t_proj = np.dot(x, tangents[j]) * x + np.dot(y, tangents[j]) * y
-                tangent_projected = t_proj / np.linalg.norm(t_proj)
-            else: 
-                tangent_projected = tangents[j]
-                tangent_projected = tangent_projected / np.linalg.norm(tangent_projected)
-            '''
-            #print(tangents[j])
-            
-            t_proj = np.dot(x, tangents[j]) * x + np.dot(y, tangents[j]) * y
-            t_proj *= 1 / np.linalg.norm(t_proj)
-            tangent_projected = t_proj
-            # Bitangent is orthogonal to both tangent and normal
-            #print(z,tangent_projected)
-            bitangent_projected = np.cross(z, tangent_projected)
-
-            # Store results
-            segmentTangent[i][j] = tangent_projected
-            segmentNormal[i][j] = z
-            segmentBitangent[i][j] = bitangent_projected
-
-            # Build rotation matrix with columns [tangent, bitangent, normal]
-            R = np.column_stack((tangent_projected, bitangent_projected, z))
-            rotationMatrix[i][j] = R
+    # Determine segment-wise: tangents, bitangents, normals and rotation matrices
+    get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh, segmentTangent, segmentNormal, segmentBitangent, rotationMatrix)
 
     # Initialize storage
     segmentsWith2ActiveNodes = [] # sublist of segments with the according segments
@@ -172,39 +230,17 @@ def surface_filling_energy_geodesic(
     activeOneSegmentSigns = [] # just a list to keep a sense of direction if only one node is fixed
 
     # Classify segments
-    for i in range(len(segments)):
-        v0, v1 = segments[i][0], segments[i][1]
-
-        if isFixedNode[v0] and isFixedNode[v1]: # Both endpoints fixed -> ignore
-            continue
-        elif not isFixedNode[v0] and not isFixedNode[v1]: # Both endpoints loose
-            segmentsWith2ActiveNodes.append((v0, v1))
-            activeTwoSegment2SegmentIdx.append(i)
-        else: # Only one fixed
-            activeNode = v1 if isFixedNode[v0] else v0
-            fixedNode = v0 if isFixedNode[v0] else v1
-            segmentsWith1ActiveNode.append((activeNode, fixedNode))
-            activeOneSegment2SegmentIdx.append(i)
-            activeOneSegmentSigns.append(-1 if isFixedNode[v0] else 1)
-
-    # Just two maps to map back and forth between the list of active nodes and "nodes"
-    activeNode2NodeIdx = {} 
-    node2ActiveNodeIdx = {}
-
-    # populating those lists
-    for i in range(len(nodes)):
-        if not isFixedNode[i]:
-            active_index = len(activeNode2NodeIdx)
-            activeNode2NodeIdx[active_index] = i
-            node2ActiveNodeIdx[i] = len(node2ActiveNodeIdx)
+    populate_segments_lists(segments, isFixedNode, segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns)
 
     # Determining the total curve length:
-    total_curve_length = np.sum(segmentLengths)
+    totalCurveLength = np.sum(segmentLengths)
 
     # Assertions
     assert len(segmentsWith2ActiveNodes) == len(activeTwoSegment2SegmentIdx)
     assert len(segmentsWith1ActiveNode) == len(activeOneSegment2SegmentIdx)
     assert len(segmentsWith1ActiveNode) == len(activeOneSegmentSigns)
+
+    vectorFieldOnNode, principalCurvatureOnNode = populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tri_mesh, vectorField)
 
     ###########################################################################
     # ENERGY TERMS
@@ -232,23 +268,7 @@ def surface_filling_energy_geodesic(
     # differentiating between cases where both segement end points are not fixed 
     # and such where only one is not.
     ###########################################################################
-
-    vectorFieldOnNode = []
-    if w_fieldAlignedness > 0:
-        for i, node in enumerate(nodes):
-            # THESE OPTIONS STILL NEED TO BE REPLACED 
-            vf = surface_point_vector_field(tri_mesh, vectorField, node)
-            vectorFieldOnNode.append(vf)
-
-    """ 
-    Lets leave this out for now
-    principalCurvatureOnNode = []
-    if w_curvatureAlignedness > 0:
-        for i, node in enumerate(nodes):
-            # THESE OPTIONS STILL NEED TO BE REPLACED 
-            vf, = surface_point_vector_field(tri_mesh, tri_mesh.vertexPrincipalCurvatureDirections, node)
-            principalCurvatureOnNode[i] = vf
-    """
+    
 
     # Loop over all segments that have 2 active endpoints
     for e_id in range(len(segmentsWith2ActiveNodes)):
@@ -295,16 +315,16 @@ def surface_filling_energy_geodesic(
 
         # Energy term 2: FIELD‑ALIGNED ENERGY
         #if w_fieldAlignedness > 0:
-        vf0 = ca.DM(vectorFieldOnNode[_v0])  # Vector field at node _v0
-        vf1 = ca.DM(vectorFieldOnNode[_v1])  # Vector field at node _v1
+        vf0 = ca.DM(vectorFieldOnNode[_v0])  if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1) # Vector field at node _v0
+        vf1 = ca.DM(vectorFieldOnNode[_v1])  if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  # Vector field at node _v1
         vec0 = ca.mtimes(R0.T, vf0)          # Transform vector into local frame
         vec1 = ca.mtimes(R1.T, vf1)
 
         crs0 = w_fieldAlignedness * (ca.cross(p1 - p0, vec0).T @ (ca.cross(p1 - p0, vec0))) / 2
         crs1 = w_fieldAlignedness * (ca.cross(p1 - p0, vec1).T @ (ca.cross(p1 - p0, vec1))) / 2
 
-        """ 
-        Lets leave this out for now
+        '''
+
         # --- Energy term 3: curvature alignedness ---
         pc0 = ca.DM(principalCurvatureOnNode[_v0])  # Curvature direction at node _v0
         pc1 = ca.DM(principalCurvatureOnNode[_v1])  # Curvature direction at node _v1
@@ -313,13 +333,13 @@ def surface_filling_energy_geodesic(
         
         dot0 = 0 #w_curvatureAlignedness * 0.5 * ca.power(ca.dot(p1 - p0, pc0_), 2)
         dot1 = 0 #w_curvatureAlignedness * 0.5 * ca.power(ca.dot(p0 - p1, pc1_), 2)
-        """ 
-
+        
+        '''
         # Total segment energy (normalized)
         
-        energy = (distance_energy + crs0 + crs1) / (edgeLen * total_curve_length)
+        energy = (distance_energy + crs0 + crs1) / (edgeLen * totalCurveLength)
 
-        #energy = (distance_energy) / (edgeLen * total_curve_length)
+        #energy = (distance_energy) / (edgeLen * totalCurveLength)
 
         #print(energy.shape)
 
@@ -366,8 +386,8 @@ def surface_filling_energy_geodesic(
         distance_energy = ca.power(dx**2 + dy**2 + dz**2, 0.5 * p)
 
         # Energy term 2: FIELD‑ALIGNED ENERGY
-        vf0 = ca.DM(vectorFieldOnNode[_v0])
-        vf1 = ca.DM(vectorFieldOnNode[_v1])
+        vf0 = ca.DM(vectorFieldOnNode[_v0]) if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  
+        vf1 = ca.DM(vectorFieldOnNode[_v1]) if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  
         vec0 = ca.mtimes(R0.T, vf0)
         vec1 = ca.mtimes(R1.T, vf1)
 
@@ -387,15 +407,15 @@ def surface_filling_energy_geodesic(
         """ 
         
         # Final energy term for this one-active-node segment
-        energy = (distance_energy + crs0 + crs1) / (edgeLen * total_curve_length)
-        #energy = (distance_energy) / (edgeLen * total_curve_length)
+        energy = (distance_energy + crs0 + crs1) / (edgeLen * totalCurveLength)
+        #energy = (distance_energy) / (edgeLen * totalCurveLength)
 
         #print(energy.shape)
 
         # Append to the global list of energy terms
         energy_terms.append(energy)
 
-    print('Shortest Curve and Field Alignment is DONE')
+    #print('Shortest Curve and Field Alignment is DONE')
 
     
 
@@ -567,14 +587,14 @@ def surface_filling_energy_geodesic(
         l_avg = (l0 + l1) / 2
 
         # Weighted bilaplacian energy
-        energy = (w_bilaplacian * l_avg * d) / total_curve_length
+        energy = (w_bilaplacian * l_avg * d) / totalCurveLength
 
         #print(energy.shape)
 
         # Append to energy list
         energy_terms.append(energy)
 
-    print('-------------Bilaplacian term is DONE--------------')
+    #print('-------------Bilaplacian term is DONE--------------')
 
 
 
@@ -676,14 +696,14 @@ def surface_filling_energy_geodesic(
 
         # Energy term
         d2_sum = l0**2 + l1**2
-        repulsion = (alphas[nodeId] * nodeWeight[nodeId] * d2_sum**(q / 2)) / total_curve_length
+        repulsion = (alphas[nodeId] * nodeWeight[nodeId] * d2_sum**(q / 2)) / totalCurveLength
         #print(f"[e_id={e_id}] repulsion symbolic: {repulsion}")
 
         #print(repulsion.shape)
 
         energy_terms.append(repulsion)
 
-    print('-------------Medial Axis term is DONE--------------')
+    #print('-------------Medial Axis term is DONE--------------')
 
     ###########################################################################
     # AND NOW FINALLY TO ADD UP ALL THE ENERGY TERMS
@@ -740,10 +760,10 @@ def surface_filling_energy_geodesic(
 
     H_posdef = eigvecs @ np.diag(eigvals_clipped) @ eigvecs.T
 
-    H_without_proj = np.array(H_val.full())
+    #H_without_proj = np.array(H_val.full())
 
-    d = np.linalg.solve(H_without_proj, -np.array(g_val).flatten())
-    #d = np.linalg.solve(H_posdef, -np.array(g_val).flatten())
+    #d = np.linalg.solve(H_without_proj, -np.array(g_val).flatten())
+    d = np.linalg.solve(H_posdef, -np.array(g_val).flatten())
     g = np.array(g_val).flatten()
 
     # Map results to descent and gradient fields

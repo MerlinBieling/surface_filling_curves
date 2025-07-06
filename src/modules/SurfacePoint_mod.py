@@ -56,6 +56,7 @@ class SurfacePoint:
         triangle = face_vertices.reshape((1, 3, 3))
         point_reshaped = projected_point.reshape((1, 3))
 
+
         # Compute barycentric coordinates
         bary = tri.points_to_barycentric(triangle, point_reshaped)[0]
 
@@ -72,10 +73,14 @@ class SurfacePoint:
             location_type = 'edge'
             zero_index = np.where(close_to_zero)[0][0]
             top_indices = [int(idx) for i, idx in enumerate(face_vertices_indices) if i != zero_index]
-            if bary[0] != 0:
+
+            # WE USE FOR t SIMPLY THE FIRST NON-ZERO BARYCENTRIC COORDINATE !!!
+            if abs(bary[0]) > tolerance:
                 t = bary[0], face_vertices_indices[0]
-            else:
+            elif abs(bary[1]) > tolerance:
                 t = bary[1], face_vertices_indices[1]
+            else:
+                print('Something went very wrong in the determiantion of the t value in surfacePoint')
         elif num_zero == 2:
             location_type = 'vertex'
             vertex_index = face_vertices_indices[np.where(~close_to_zero)[0][0]]
@@ -87,11 +92,12 @@ class SurfacePoint:
         return cls(location_type, top_indices, projected_point, face_vertices_indices, face_index, bary=bary, t=t, tri_mesh=tri_mesh)
     
     @classmethod
-    def from_barycentric(cls, face_index, bary, tri_mesh, tolerance=1e-6):
+    def from_barycentric(cls, face_vertices_indices, face_index, bary, tri_mesh, tolerance=1e-6):
+        # IMPORTANT: THE BARYCENTRIC COORDINATES 'bary' MUST REFER TO 'face_vertices_indices'
+        # the bary coordinates ALWAYS need to be NORMALIZED!
         """
         Creates a SurfacePoint from a face index and barycentric coordinates.
         """
-        face_vertices_indices = tri_mesh.faces[face_index]
         face_vertices = tri_mesh.vertices[face_vertices_indices]
 
         # Reconstruct 3D coordinate from barycentric coordinates
@@ -109,16 +115,20 @@ class SurfacePoint:
             location_type = 'edge'
             zero_index = np.where(close_to_zero)[0][0]
             top_indices = [int(idx) for i, idx in enumerate(face_vertices_indices) if i != zero_index]
-            if bary[0] != 0:
+
+            # WE USE FOR t SIMPLY THE FIRST NON-ZERO BARYCENTRIC COORDINATE !!!
+            if abs(bary[0]) > tolerance:
                 t = bary[0], face_vertices_indices[0]
-            else:
+            elif abs(bary[1]) > tolerance:
                 t = bary[1], face_vertices_indices[1]
+            else:
+                print('Something went very wrong in the determiantion of the t value in surfacePoint')
         elif num_zero == 2:
             location_type = 'vertex'
             vertex_index = face_vertices_indices[np.where(~close_to_zero)[0][0]]
             top_indices = [int(vertex_index)]
         else:
-            raise ValueError("Invalid barycentric coordinates: all components are zero.")
+            print('Something went very wrong in the determiantion of a surfacePoint')
 
         return cls(location_type, top_indices, coord3d, face_vertices_indices, face_index, bary, t, tri_mesh=tri_mesh)
     

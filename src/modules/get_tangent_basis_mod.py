@@ -20,19 +20,11 @@ import trimesh
 ###########################################################################
 
 # Predefine basis vectors to avoid reallocation
-BASIS_VECTORS = np.array([
-    [1.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0],
-    [0.0, 0.0, 1.0]
-])
-
 def perpendicular_vector(v):
-    v = np.asarray(v)
-    abs_v = np.abs(v)
-    idx = np.argmin(abs_v)  # find component with smallest magnitude
-    other = BASIS_VECTORS[idx]
-    perp = np.cross(v, other)
-    return perp / np.linalg.norm(perp)
+    x, y, z = v = np.asarray(v, float)
+    s = np.linalg.norm(v)
+    sz = z + np.copysign(s, z)
+    return np.array([sz*z - x*x, -x*y, -x*sz])
 
 def get_tangent_basis(tri_mesh: trimesh.Trimesh, surfacepoint):
     pt_type = surfacepoint.type
