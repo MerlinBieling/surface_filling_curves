@@ -29,6 +29,7 @@ sys.path.append(r"C:\Users\merli\Desktop\BA_thesis\sfc_python_implementation\fun
 
 # Import your SurfacePoint class
 from SurfacePoint_mod import SurfacePoint
+from point_point_geodesic_mod import point_point_geodesic
 
 
 # Helper to extract vertices and faces from trimesh object
@@ -38,16 +39,16 @@ def get_vertices_faces(tri_mesh):
     return vertices, faces
 
 
-def trace_geodesic(tri_mesh, start_point, direction, tracer, tol=1e-8):
+def trace_geodesic(tri_mesh, meshlib_mesh, start_point, direction, tracer, solver, dictionary, tol, use_point_point_geodesic = True):
     """
     Dispatch geodesic tracing depending on SurfacePoint type.
 
     """
      
-    vertices, faces = get_vertices_faces(tri_mesh)
+    #vertices, faces = get_vertices_faces(tri_mesh)
 
     # Rescale direction to desired length
-    length = norm(direction)
+    #length = norm(direction)
     
     # Dispatch depending on SurfacePoint type
     if start_point.type == 'vertex':
@@ -61,9 +62,16 @@ def trace_geodesic(tri_mesh, start_point, direction, tracer, tol=1e-8):
         polyline = tracer.trace_geodesic_from_face(face_index, barycentric_coords, direction, max_iterations=1000)
     
     # Postprocessing: convert polyline points to SurfacePoint instances
-    surface_points = []
-    for pt in polyline:
-        sp = SurfacePoint.from_position(pt, tri_mesh, tolerance=tol)
-        surface_points.append(sp)
+    if use_point_point_geodesic:
+
+        end_point = SurfacePoint.from_position(polyline[-1], tri_mesh, tolerance=tol)
+
+        surface_points = point_point_geodesic(tri_mesh, meshlib_mesh, start_point, end_point, solver, dictionary)
+     
+    else:
+        surface_points = []
+        for pt in polyline:
+            sp = SurfacePoint.from_position(pt, tri_mesh, tolerance=tol)
+            surface_points.append(sp)
 
     return surface_points

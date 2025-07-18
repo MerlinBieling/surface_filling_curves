@@ -2,6 +2,7 @@ import numpy as np
 import trimesh
 
 from trimesh.grouping import group_rows
+from trimesh.proximity import ProximityQuery
 
 
 def cache_boundary_vertices(tri_mesh):
@@ -38,5 +39,7 @@ def cache_boundary_vertices(tri_mesh):
     tri_mesh.isBoundaryEdge = mask
 
     tri_mesh.boundary_edges = boundary_edges
+
+    tri_mesh._pq = ProximityQuery(tri_mesh)
 
     return isBoundaryVertex

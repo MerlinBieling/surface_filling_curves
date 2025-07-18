@@ -16,15 +16,10 @@ import numpy as np
 # It is used in surface_point_evolution.
 ###########################################################################
 
-# Ensure the local directory is accessible
-module_dir = os.path.dirname(os.path.abspath(__file__))
-if module_dir not in sys.path:
-    sys.path.append(module_dir)
-
 from SurfacePoint_mod import SurfacePoint
 from point_point_geodesic_mod import point_point_geodesic
 
-def connect_surface_points(tri_mesh, meshlib_mesh, nodes, segments, solver):
+def connect_surface_points(tri_mesh, meshlib_mesh, nodes, segments, solver, dictionary):
     """
     For each segment (pair of node indices), compute intermediate surface points 
     and geodesic length between them using the geodesic function.
@@ -36,26 +31,43 @@ def connect_surface_points(tri_mesh, meshlib_mesh, nodes, segments, solver):
     - segments: list of [i, j] index pairs into `nodes`
 
     Returns:
-    - edge_surface_points: list of lists of intermediate SurfacePoints (excluding endpoints)
-    - edge_lengths: list of geodesic lengths for each segment
+    - edgeSurfacePoints: list of lists of intermediate SurfacePoints (excluding endpoints)
+    - edgeLengths: list of geodesic lengths for each segment
     """
-    edge_surface_points = []
-    edge_lengths = []
 
-    for idx0, idx1 in segments:
+    numSegments = len(segments)
+
+    # 1. edgeSurfacePoints: Liste von leeren Listen mit Länge numSegments
+    edgeSurfacePoints = [[] for _ in range(numSegments)]  # :contentReference[oaicite:1]{index=1}
+
+    # 2. edgeLengths: Liste mit numSegments Einträgen, alle initial auf 0.0
+    edgeLengths = [0.0] * numSegments  # :contentReference[oaicite:2]{index=2}
+
+    for i, seg in enumerate(segments):
+
+        idx0, idx1 = seg
+
+        #print(idx0, idx1)
         p0 = nodes[idx0]
         p1 = nodes[idx1]
 
-        path, length = point_point_geodesic(tri_mesh, meshlib_mesh, p0, p1, solver)
+        path = point_point_geodesic(tri_mesh, meshlib_mesh, p0, p1, solver, dictionary)
 
-        if path is None or np.isinf(length):
-            #print(f"[WARNING] Geodesic path between nodes {idx0} and {idx1} failed.")
-            edge_surface_points.append([])   # fallback: no intermediates
-            edge_lengths.append(float('inf'))
-            continue
+        length = 0.0
+        cartesianCoord = [sp.coord3d for sp in path]
 
-        intermediates = path[1:-1] if len(path) > 2 else []
-        edge_surface_points.append(intermediates)
-        edge_lengths.append(length)
+        #print('p0 and p1 are generated_from:', p0.generated_from, 'and', p1.generated_from)
 
-    return edge_surface_points, edge_lengths
+        for j in range(len(path)):
+            if j != 0:
+                # Abstand zwischen Kartesischen Koordinaten berechnen und aufsummieren
+                diff = cartesianCoord[j] - cartesianCoord[j - 1]
+                length += np.linalg.norm(diff)  # entspricht .norm() in C++ :contentReference[oaicite:1]{index=1}
+
+            # Innerhalb (nicht am ersten oder letzten Punkt) den Punkt sammeln
+            if j != 0 and j != len(path) - 1:
+                edgeSurfacePoints[i].append(path[j])
+
+        edgeLengths[i] = length
+
+    return edgeSurfacePoints, edgeLengths

@@ -4,6 +4,9 @@ import casadi as ca
 import numpy as np
 import math
 from math import atan2, cos, sin, pi
+import numpy as np
+from scipy.linalg import cholesky, LinAlgError
+import copy
 
 from get_tangent_basis_mod import get_tangent_basis
 from surface_point_vector_field_mod import surface_point_vector_field
@@ -34,15 +37,22 @@ from surface_point_tangent_basis_mod import surface_point_tangent_basis
 
 tol = 1e-6
 
-def populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(activeNode2NodeIdx, node2ActiveNodeIdx, nodes, isFixedNode):
+def populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(nodes, isFixedNode):
+    activeNode2NodeIdx = {} 
+    node2ActiveNodeIdx = {}
     # populating those lists
     for i in range(len(nodes)):
         if not isFixedNode[i]:
             active_index = len(activeNode2NodeIdx)
             activeNode2NodeIdx[active_index] = i
             node2ActiveNodeIdx[i] = len(node2ActiveNodeIdx)
+    return activeNode2NodeIdx, node2ActiveNodeIdx
 
-def get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh, segmentTangent, segmentNormal, segmentBitangent, rotationMatrix):
+def get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh):
+    rotationMatrix = [ [np.eye(3), np.eye(3)] for _ in range(len(segments)) ]
+    segmentTangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
+    segmentNormal = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
+    segmentBitangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
 
     for i in range(len(segments)):    
     # Build full list of SurfacePoints on the segment
@@ -97,11 +107,21 @@ def get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoin
             segmentNormal[i][j] = z
             segmentBitangent[i][j] = bitangent_projected
 
+            #print('This is inside the surfac filling ---:',segmentBitangent[i][j])
+
             # Build rotation matrix with columns [tangent, bitangent, normal]
             R = np.column_stack((tangent_projected, bitangent_projected, z))
             rotationMatrix[i][j] = R
+    return segmentTangent, segmentNormal, segmentBitangent, rotationMatrix
 
-def populate_segments_lists(segments, isFixedNode, segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns):
+def populate_segments_lists(segments, isFixedNode):
+    
+    # Initialize storage
+    segmentsWith2ActiveNodes = [] # sublist of segments with the according segments
+    activeTwoSegment2SegmentIdx = [] # just a list to map indices back to "segments"
+    segmentsWith1ActiveNode = [] # sublist of segments with the according segments
+    activeOneSegment2SegmentIdx = [] # just a list to map indices back to "segments"
+    activeOneSegmentSigns = [] # just a list to keep a sense of direction if only one node is fixed
 
     # Classify segments
     for i in range(len(segments)):
@@ -118,6 +138,8 @@ def populate_segments_lists(segments, isFixedNode, segmentsWith2ActiveNodes, act
             segmentsWith1ActiveNode.append((activeNode, fixedNode))
             activeOneSegment2SegmentIdx.append(i)
             activeOneSegmentSigns.append(-1 if isFixedNode[v0] else 1)
+
+    return segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns
 
 def populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tri_mesh, vectorField):
     vectorFieldOnNode = []
@@ -137,7 +159,7 @@ def populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tr
             vf = surface_point_vector_field(tri_mesh, curvature_field, node)
             principalCurvatureOnNode.append(vf) 
     
-    print('BEGINNING',principalCurvatureOnNode, 'ENDING')
+    #print('BEGINNING',principalCurvatureOnNode, 'ENDING')
 
     return vectorFieldOnNode, principalCurvatureOnNode
 
@@ -158,6 +180,7 @@ def surface_filling_energy_geodesic(
 
     # Mesh related data:
     tri_mesh,                        # a Trimesh instance used for local tangent basis computation
+    tracer,
         
     # Medial Axis related Data:
     maxRadius,                      # maximum search radius for medial axis computation
@@ -197,50 +220,29 @@ def surface_filling_energy_geodesic(
     branch_radius = radius * branch_ratio
     alpha = 4 / (branch_radius ** 2)
 
-    tolerance = 1e-6
+    # Getting the length of all the curves to later be able to 
+    # give weight to segements according to their relative length
+    totalCurveLength = sum(segmentLengths)
 
-
-    rotationMatrix = [ [np.eye(3), np.eye(3)] for _ in range(len(segments)) ]
-    segmentTangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
-    segmentNormal = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
-    segmentBitangent = [ [np.zeros(3), np.zeros(3)] for _ in range(len(segments)) ]
 
     assert len(nodes) == len(isFixedNode), "Mismatch: nodes and isFixedNode must be the same length"
     assert len(nodes) == len(cartesianCoords), "Mismatch: nodes and cartesianCoords must be the same length"
 
     # Just two maps to map back and forth between the list of active nodes and "nodes"
-    activeNode2NodeIdx = {} 
-    node2ActiveNodeIdx = {}
-    populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(activeNode2NodeIdx, node2ActiveNodeIdx, nodes, isFixedNode)
-
-    
-
-    # Getting the length of all the curves to later be able to 
-    # give weight to segements according to their relative length
-    totalCurveLength = sum(segmentLengths)
+    activeNode2NodeIdx, node2ActiveNodeIdx = populate_node2ActiveNodeIdx_and_activeNode2NodeIdx(nodes, isFixedNode)
 
     # Determine segment-wise: tangents, bitangents, normals and rotation matrices
-    get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh, segmentTangent, segmentNormal, segmentBitangent, rotationMatrix)
-
-    # Initialize storage
-    segmentsWith2ActiveNodes = [] # sublist of segments with the according segments
-    activeTwoSegment2SegmentIdx = [] # just a list to map indices back to "segments"
-    segmentsWith1ActiveNode = [] # sublist of segments with the according segments
-    activeOneSegment2SegmentIdx = [] # just a list to map indices back to "segments"
-    activeOneSegmentSigns = [] # just a list to keep a sense of direction if only one node is fixed
+    segmentTangent, segmentNormal, segmentBitangent, rotationMatrix = get_tan_bitan_normal_and_rotation_matrix(segments, nodes, segmentSurfacePoints, tri_mesh)
 
     # Classify segments
-    populate_segments_lists(segments, isFixedNode, segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns)
+    segmentsWith2ActiveNodes, activeTwoSegment2SegmentIdx, segmentsWith1ActiveNode, activeOneSegment2SegmentIdx, activeOneSegmentSigns = populate_segments_lists(segments, isFixedNode)
 
-    # Determining the total curve length:
-    totalCurveLength = np.sum(segmentLengths)
+    vectorFieldOnNode, principalCurvatureOnNode = populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tri_mesh, vectorField)
 
-    # Assertions
+    # More Assertions
     assert len(segmentsWith2ActiveNodes) == len(activeTwoSegment2SegmentIdx)
     assert len(segmentsWith1ActiveNode) == len(activeOneSegment2SegmentIdx)
     assert len(segmentsWith1ActiveNode) == len(activeOneSegmentSigns)
-
-    vectorFieldOnNode, principalCurvatureOnNode = populate_vector_fields(w_fieldAlignedness, w_curvatureAlignedness, nodes, tri_mesh, vectorField)
 
     ###########################################################################
     # ENERGY TERMS
@@ -278,9 +280,11 @@ def surface_filling_energy_geodesic(
         segmentId = activeTwoSegment2SegmentIdx[e_id] 
 
         base = 3 * node2ActiveNodeIdx[_v0]
+
         x0 = x_sym[base     : base + 3] 
 
         base = 3 * node2ActiveNodeIdx[_v1]
+        #print('this is the base',base)
         x1 = x_sym[base     : base + 3]
 
         #print("x0 type:", type(x0), "value:", x0)
@@ -315,8 +319,8 @@ def surface_filling_energy_geodesic(
 
         # Energy term 2: FIELD‑ALIGNED ENERGY
         #if w_fieldAlignedness > 0:
-        vf0 = ca.DM(vectorFieldOnNode[_v0])  if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1) # Vector field at node _v0
-        vf1 = ca.DM(vectorFieldOnNode[_v1])  if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  # Vector field at node _v1
+        vf0 = ca.DM(vectorFieldOnNode[_v0])  if w_fieldAlignedness > tol else ca.DM.zeros(3, 1) # Vector field at node _v0
+        vf1 = ca.DM(vectorFieldOnNode[_v1])  if w_fieldAlignedness > tol else ca.DM.zeros(3, 1)  # Vector field at node _v1
         vec0 = ca.mtimes(R0.T, vf0)          # Transform vector into local frame
         vec1 = ca.mtimes(R1.T, vf1)
 
@@ -341,7 +345,7 @@ def surface_filling_energy_geodesic(
 
         #energy = (distance_energy) / (edgeLen * totalCurveLength)
 
-        #print(energy.shape)
+        #print(type(energy))
 
         # Append to energy term list
         energy_terms.append(energy)
@@ -379,15 +383,23 @@ def surface_filling_energy_geodesic(
         dy = ca.fabs(p0[1] - p1[1])
         dz = ca.fabs(p0[2] - p1[2])
 
+
+
         #print("dx symbolic:", dx, "type:", type(dx))
         #print("dy symbolic:", dy, "type:", type(dy))
         #print("dz symbolic:", dz, "type:", type(dz))
+        #print("p symbolic:", p, "type:", type(p[0]))
+
+        exp = ca.DM(0.5) * ca.DM(p)
+
         
-        distance_energy = ca.power(dx**2 + dy**2 + dz**2, 0.5 * p)
+        distance_energy = ca.power(dx**2 + dy**2 + dz**2, exp)
+
+        #print("distance_energy:", distance_energy, "type:", type(distance_energy))
 
         # Energy term 2: FIELD‑ALIGNED ENERGY
-        vf0 = ca.DM(vectorFieldOnNode[_v0]) if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  
-        vf1 = ca.DM(vectorFieldOnNode[_v1]) if w_fieldAlignedness > tolerance else ca.DM.zeros(3, 1)  
+        vf0 = ca.DM(vectorFieldOnNode[_v0]) if w_fieldAlignedness > tol else ca.DM.zeros(3, 1)  
+        vf1 = ca.DM(vectorFieldOnNode[_v1]) if w_fieldAlignedness > tol else ca.DM.zeros(3, 1)  
         vec0 = ca.mtimes(R0.T, vf0)
         vec1 = ca.mtimes(R1.T, vf1)
 
@@ -616,6 +628,7 @@ def surface_filling_energy_geodesic(
         for j in range(2):  # j = 0 or 1
             t = segmentTangent[i][j]
             n = segmentNormal[i][j]
+            
             b = segmentBitangent[i][j]
             #print(b)
 
@@ -627,34 +640,83 @@ def surface_filling_energy_geodesic(
             nodeBitangents[v] += b / np.linalg.norm(b)
 
             # Perturbation for stability in edge cases
-            if np.linalg.norm(nodeTangents[v]) < 1e-5:
+            
+            if np.linalg.norm(nodeTangents[v]) < tol:
                 nodeTangents[v] -= 0.01 * (n / np.linalg.norm(n))
-            if np.linalg.norm(nodeNormals[v]) < 1e-5:
+            if np.linalg.norm(nodeNormals[v]) < tol:
                 nodeNormals[v] -= 0.01 * (t / np.linalg.norm(t))
-            if np.linalg.norm(nodeBitangents[v]) < 1e-5:
+            
+            if np.linalg.norm(nodeBitangents[v]) < tol:
                 nodeBitangents[v] -= 0.01 * (t / np.linalg.norm(t))
 
             # Add half the segment length to the node's weight
             nodeWeight[v] += segmentLengths[i] / 2.0
 
     # Final normalization step for each node's accumulated vectors
+
     for i in range(num_nodes):
-        nodeTangents[i] = nodeTangents[i] / np.linalg.norm(nodeTangents[i])
-        nodeNormals[i] = nodeNormals[i] / np.linalg.norm(nodeNormals[i])
-        #print(nodeBitangents[i])
-        nodeBitangents[i] = nodeBitangents[i] / np.linalg.norm(nodeBitangents[i])
+
+        
+        # Tangent
+        norm_tan = np.linalg.norm(nodeTangents[i])
+        if norm_tan > tol:
+            nodeTangents[i] /= norm_tan
+        else:
+            nodeTangents[i] = np.zeros_like(nodeTangents[i])  # or tol * default_direction
+
+        # Normal
+        norm_nml = np.linalg.norm(nodeNormals[i])
+        if norm_nml > tol:
+            nodeNormals[i] /= norm_nml
+        else:
+            nodeNormals[i] = np.zeros_like(nodeNormals[i])
+        
+
+        # Bitangent
+        norm_bit = np.linalg.norm(nodeBitangents[i])
+        if norm_bit > tol:
+            nodeBitangents[i] /= norm_bit
+        else:
+            nodeBitangents[i] = np.zeros_like(nodeBitangents[i])
 
         #print(type(nodeBitangents[i]))
         #print(type(cartesianCoords[i]))
 
+    '''
+    # THIS REAALLY NEEDS TO BE REMOVED AFTER DEBUGGING!!!!
+    #assert [sp.coord3d for sp in nodes] == cartesianCoords, "Nodes and Cartesian coordinates are no longer consistent"
 
-
+    print('Is cartesianCoords still conistent with nodes?')
+    pairs = list(zip([sp.coord3d for sp in nodes], cartesianCoords))
+    if all(np.array_equal(p, q) for p, q in pairs):
+        print("All pairs are identical.")
+    else:
+        print("At least one pair differs.")
+    # ------------------------------------------------------------------
+    '''
 
     # Compute medial axis using provided function
-    nodeMedialAxis = medial_axis(nodes, cartesianCoords, 
+    nodeMedialAxis = medial_axis(tri_mesh, nodes, cartesianCoords, 
                                  nodeTangents, nodeNormals, 
-                                 nodeBitangents, maxRadius, 
+                                 nodeBitangents, maxRadius, tracer, 
                                  isGeodesic=False)
+    
+    #print('These are the medial axis points:', nodeMedialAxis)
+
+    DEBUG = []
+    
+
+
+    print('UPDATEEEDD')
+
+    for j in range(len(nodes)):
+        x0 = nodeMedialAxis[j][0]
+        x1 = nodeMedialAxis[j][1]
+        x2 = np.array([nodes[j].coord3d[0], nodes[j].coord3d[1], nodes[j].coord3d[2]])
+        DEBUG.append(np.stack([nodeMedialAxis[j][0], nodeMedialAxis[j][1], nodes[j].coord3d]))
+    
+    DEBUG = np.stack(DEBUG)
+    
 
 
     # Construct per-node alpha values
@@ -672,6 +734,9 @@ def surface_filling_energy_geodesic(
     for e_id in range(len(activeNode2NodeIdx)):
         nodeId = activeNode2NodeIdx[e_id]
 
+        #print('The activeNode2NodeIdxhas length', len(activeNode2NodeIdx))
+        #print('This is nodeId:', nodeId)
+
         # Extract medial-axis centers (shape: (3,))
         c0 = ca.DM(nodeMedialAxis[nodeId][0])
         c1 = ca.DM(nodeMedialAxis[nodeId][1])
@@ -679,7 +744,10 @@ def surface_filling_energy_geodesic(
         #print(f"[e_id={e_id}] c1 type: {type(c1)}, shape: {c1.shape}, c1: {c1.T}")
 
         # Extract symbolic variable for this node
-        base = 3 * nodeId
+        base = 3 * e_id # THIS MAYBE WRONG! IT MIGHT HAVE TO BE nodeId
+
+        #print('Just before the error base:',base)
+        #print('Just before the error x_sym:',x_sym)
         x = x_sym[base     : base + 3]
         #print(f"[e_id={e_id}] x_sym[:,{e_id}] type: {type(x)}, shape: {x.shape}, symbolic: {x}")
 
@@ -697,6 +765,7 @@ def surface_filling_energy_geodesic(
         # Energy term
         d2_sum = l0**2 + l1**2
         repulsion = (alphas[nodeId] * nodeWeight[nodeId] * d2_sum**(q / 2)) / totalCurveLength
+        #print(type(repulsion))
         #print(f"[e_id={e_id}] repulsion symbolic: {repulsion}")
 
         #print(repulsion.shape)
@@ -727,8 +796,7 @@ def surface_filling_energy_geodesic(
 
     #print(E)
 
-    # 2. Compute Hessian and gradient:
-
+    
     x_eval = ca.vertcat(*[ca.DM(cartesianCoords[idx]) for idx in activeNode2NodeIdx])
 
     H, g = ca.hessian(E, x_sym) # this actually computes both hessian and gradient
@@ -751,14 +819,31 @@ def surface_filling_energy_geodesic(
 
     #print(H_val.is_constant()) # JUST check if it contains any more symbolic expressions
 
-    H_numpy = np.array(H_val.full())  # full() → NumPy array
-    eigvals, eigvecs = np.linalg.eigh(H_numpy)
 
-    # Step 3: Clip eigenvalues to ensure positive definiteness
-    delta = 1e-6  # small positive threshold
-    eigvals_clipped = np.maximum(eigvals, delta)
+    def make_pos_def(H, delta=1e-6):
+        """
+        Versucht Cholesky. Wenn es fehlschlägt, wird H <- H + α·I iterativ, 
+        bis SPD (symmetric positive definite) erreicht ist.
+        """
+        H_sym = (H + H.T) / 2  # symmetrisieren
+        try:
+            # Test auf SPD
+            _ = cholesky(H_sym, lower=True, check_finite=True)
+            return H_sym
+        except LinAlgError:
+            # Iterative Verschiebung
+            alpha = delta
+            while True:
+                try:
+                    H2 = H_sym + alpha * np.eye(H.shape[0])
+                    _ = cholesky(H2, lower=True, check_finite=True)
+                    return H2
+                except LinAlgError:
+                    alpha *= 10
 
-    H_posdef = eigvecs @ np.diag(eigvals_clipped) @ eigvecs.T
+
+    H_numpy = np.array(H_val.full())
+    H_posdef = make_pos_def(H_numpy, delta=1e-6)
 
     #H_without_proj = np.array(H_val.full())
 
@@ -780,5 +865,6 @@ def surface_filling_energy_geodesic(
         gradient[idx] = np.array(gradient_vec)
 
 
+    #descent = [x if x is not None else np.zeros(3) for x in descent]
 
-    return descent, gradient, ca.Function("E", [x_sym], [E]), nodeMedialAxis
+    return descent, gradient, ca.Function("E", [x_sym], [E]), nodeMedialAxis, DEBUG

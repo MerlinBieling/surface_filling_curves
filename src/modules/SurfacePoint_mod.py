@@ -1,9 +1,10 @@
 import numpy as np
 import trimesh
 import trimesh.triangles as tri
+import copy
 
 class SurfacePoint:
-    def __init__(self, location_type, top_indices, coord3d = None, face_indices = None, face_index = None, bary=None, t=None, tri_mesh = None):
+    def __init__(self, location_type, top_indices, coord3d = None, face_indices = None, face_index = None, bary=None, t=None, tri_mesh = None, generated_from = None):
         """
         Represents a point on a mesh surface.
 
@@ -23,6 +24,16 @@ class SurfacePoint:
         self.bary = bary
         self.t = t # This is only used in the EDGE case and gives you the relative position on the edge.
         self.tri_mesh = tri_mesh
+        self.generated_from = generated_from
+
+    def copy(self):
+        # Temporarily remove tri_mesh to avoid deepcopying it
+        temp_mesh = self.tri_mesh
+        self.tri_mesh = None
+        new_copy = copy.deepcopy(self)
+        self.tri_mesh = temp_mesh
+        new_copy.tri_mesh = temp_mesh
+        return new_copy
 
     @classmethod
     def from_position(cls, point, tri_mesh, tolerance=1e-6):
@@ -45,7 +56,7 @@ class SurfacePoint:
             raise ValueError(f"Point must be a single 3D coordinate with shape (3,) or (1,3), got {np_point.shape}")
 
         # Project the point onto the mesh surface
-        projected_point, distance, face_index = tri_mesh.nearest.on_surface(np_point)
+        projected_point, distance, face_index = tri_mesh._pq.on_surface(np_point)
         projected_point = projected_point[0]
         face_index = face_index[0]
 
@@ -89,7 +100,7 @@ class SurfacePoint:
             # All barycentric coordinates are zero; this should not happen
             raise ValueError("Invalid barycentric coordinates: all components are zero.")
 
-        return cls(location_type, top_indices, projected_point, face_vertices_indices, face_index, bary=bary, t=t, tri_mesh=tri_mesh)
+        return cls(location_type, top_indices, projected_point, face_vertices_indices, face_index, bary=bary, t=t, tri_mesh=tri_mesh, generated_from = 'position')
     
     @classmethod
     def from_barycentric(cls, face_vertices_indices, face_index, bary, tri_mesh, tolerance=1e-6):
@@ -102,6 +113,8 @@ class SurfacePoint:
 
         # Reconstruct 3D coordinate from barycentric coordinates
         coord3d = bary[0] * face_vertices[0] + bary[1] * face_vertices[1] + bary[2] * face_vertices[2]
+
+        print(type(coord3d))
 
         # Determine the location type based on barycentric coordinates
         close_to_zero = np.isclose(bary, 0.0, atol=tolerance)
@@ -130,7 +143,7 @@ class SurfacePoint:
         else:
             print('Something went very wrong in the determiantion of a surfacePoint')
 
-        return cls(location_type, top_indices, coord3d, face_vertices_indices, face_index, bary, t, tri_mesh=tri_mesh)
+        return cls(location_type, top_indices, coord3d, face_vertices_indices, face_index, bary, t, tri_mesh=tri_mesh, generated_from = 'bary')
     
     '''
     @classmethod

@@ -9,14 +9,9 @@ from sharedFace_mod import sharedFace
 
 EPSILON = 1e-6
 
-def cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return np.cross(a, b)
 
-def dot(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b))
 
-def equals(a: float, b: float) -> bool:
-    return abs(a - b) < EPSILON
+
 
 def check_intersection(
     tri_mesh,
@@ -34,23 +29,30 @@ def check_intersection(
     faceToSurfacePoints = {} 
     faceRegistered = {}       
 
+    # In this first bit we only register which points (both nodes and segmentsurfacepoints)
+    # lie on which face. If a face
     for i in range(len(segments)):
         v0 = nodes[segments[i][0]]
         v1 = nodes[segments[i][1]]
         path = edgeSurfacePoints[i] # All the surface points on the segment between v0 and v1
 
-        faceIds = []
-        pointsOnCurrentFace = []
+        faceIds = [] # here we gather the face indices of faces which contain surfacepoints which are part of this segment
+        pointsOnCurrentFace = []# list of lists, always containing two nodes
 
         for j in range(len(path) + 1):
             v_prev = v0 if j == 0 else path[j - 1]
             v_next = v1 if j == len(path) else path[j]
 
-            # assert(checkAdjacent(v_prev, v_next))
+            
+            #assert(checkAdjacent(v_prev, v_next,  tri_mesh))
+            
             if not checkAdjacent(v_prev, v_next, tri_mesh):
                 continue
+            
 
             faceId = sharedFace(v_prev, v_next, tri_mesh)
+
+            #assert faceId != -1
 
             if len(faceIds) == 0 or faceId != faceIds[-1]:
                 faceIds.append(faceId)
@@ -61,8 +63,8 @@ def check_intersection(
 
         for j in range(len(faceIds)):
             faceId = faceIds[j]
-            if not faceRegistered.get(faceId, False):
-                faceRegistered[faceId] = True
+            if not faceRegistered.get(faceId, False): # if the face is not registered yet...
+                faceRegistered[faceId] = True # ...register it
                 faceToSurfacePoints[faceId] = []
             faceToSurfacePoints[faceId].append(pointsOnCurrentFace[j])
 
@@ -86,17 +88,17 @@ def check_intersection(
 
                         d1 = p1 - p0
                         d2 = q1 - q0
-                        crossProduct = cross(d1, d2)
+                        crossProduct = np.cross(d1, d2)
 
                         if np.linalg.norm(crossProduct) < EPSILON * aveEdgelen * aveEdgelen:
                             continue
 
                         diff = q0 - p0
-                        denominator = dot(crossProduct, crossProduct)
-                        t1 = dot(cross(diff, d2), crossProduct) / denominator
-                        t2 = dot(cross(diff, d1), crossProduct) / denominator
+                        denominator = np.dot(crossProduct, crossProduct)
+                        t1 = np.dot(np.cross(diff, d2), crossProduct) / denominator
+                        t2 = np.dot(np.cross(diff, d1), crossProduct) / denominator
 
-                        if (equals(t1, 0) or equals(t1, 1)) and (equals(t2, 0) or equals(t2, 1)):
+                        if (abs(t1 - 0) < EPSILON or abs(t1 - 1) < EPSILON) and (abs(t2 - 0) < EPSILON or abs(t2 - 1) < EPSILON):
                             continue
 
                         if -EPSILON < t1 < 1 + EPSILON and -EPSILON < t2 < 1 + EPSILON:

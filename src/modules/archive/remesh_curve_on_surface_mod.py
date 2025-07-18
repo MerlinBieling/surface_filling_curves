@@ -1,3 +1,4 @@
+from typing import List, Tuple
 import numpy as np
 import math
 import trimesh.triangles as tri
@@ -6,7 +7,6 @@ import copy
 from point_point_geodesic_mod import point_point_geodesic
 from SurfacePoint_mod import SurfacePoint
 from sharedFace_mod import sharedFace
-from find_connected_chains_mod import find_connected_chains
 
 ###########################################################################
 # Content:
@@ -43,7 +43,7 @@ def removeShortEdges(
         dictionary
         
     ):
-    '''
+
     ################################################
     #This is just a check that the required input still has nodes sharing Faces as they should
     for i in range(len(segments)):
@@ -56,7 +56,6 @@ def removeShortEdges(
             assert face_index != -1, "Points do already not share a face in removeShortEdges"
             #print("Nothing to see here! This works fine!!!")
     ################################################
-    '''
 
     deletingNodes = {i: False for i in range(len(nodes))}
 
@@ -123,6 +122,7 @@ def removeShortEdges(
                 v = segments[currentSegment][1] if segments[currentSegment][0] == v else segments[currentSegment][0]
 
             newSegments.append([node2NewNode[v0], node2NewNode[v]])
+            
             path = point_point_geodesic(tri_mesh, meshlib_mesh, nodes[v0], nodes[v], solver, dictionary)
             
             length = 0.0
@@ -141,6 +141,8 @@ def removeShortEdges(
     assert len(newSegmentSurfacePoints) == len(newSegments)
     assert len(newSegmentLengths) == len(newSegments)
 
+    print('These are now the new segments', newSegments)
+
     return newNodes, newSegments, newSegmentSurfacePoints, newSegmentLengths, newNodeIsFixed
 
 def subdivideSegments( 
@@ -153,35 +155,33 @@ def subdivideSegments(
     h
     ):
 
-    newNodes = [sp.copy() for sp in nodes]
-    newSegments = copy.deepcopy(segments)
-    newSegmentSurfacePoints = [[sp.copy() for sp in sp_list] for sp_list in segmentSurfacePoints]
-    newSegmentLengths = copy.deepcopy(segmentLengths)
-    newNodeIsFixed = copy.deepcopy(isFixedNode)
+    newNodes = copy.deepcopy(nodes)
+    newSegments = segments.copy()
+    newSegmentSurfacePoints = copy.deepcopy(segmentSurfacePoints)
+    newSegmentLengths = segmentLengths.copy()
+    newNodeIsFixed = isFixedNode.copy()
 
     for i in range(len(segments)):
         edgeLen = segmentLengths[i]
-        #print('THe curent edgeLen is:',edgeLen)
+        print('THe curent edgeLen is:',edgeLen)
         if isFixedNode[segments[i][0]] and isFixedNode[segments[i][1]]:
             continue # segments between fixed points and no nodes inbetween are completely ignored
 
-        if edgeLen >  2 * h:
-            #print('Still not working?')
+        if edgeLen > 2 * h:
             divisionNum = math.ceil(edgeLen / (2 * h))
             lenPerDivision = edgeLen / divisionNum
 
             segmentPoints = [nodes[segments[i][0]]] + segmentSurfacePoints[i] + [nodes[segments[i][1]]]
-            '''
-            #print('TEEEST')
+
             ################################################
             #This is just a check that the required input still has nodes sharing Faces as they should
             for j in range(1, len(segmentPoints)):
                             
                 face_index = sharedFace(segmentPoints[j-1], segmentPoints[j], tri_mesh)
-                assert face_index != -1, "Points do already not share a face in subdividesegments"
+                assert face_index != -1, "Points do already not share a face in removeShortEdges"
                 #print("Nothing to see here! This works fine!!!")
             ################################################
-            '''
+
 
             cartesianCoords = [sp.coord3d for sp in segmentPoints]
 
@@ -198,7 +198,7 @@ def subdivideSegments(
 
                 for k in range(num - numBefore):
                     _n = numBefore + 1 + k
-                    
+
                     if _n == divisionNum:
                         break
 
@@ -215,6 +215,18 @@ def subdivideSegments(
                     triangle = tri_mesh.vertices[face_vertices_indices]
                     vec0, vec1 = tri.points_to_barycentric(np.array([triangle, triangle]), np.array([segmentPoints[j-1].coord3d, segmentPoints[j].coord3d]), method='cross')
                     #print('Did this bary calculation go well?:')
+                    '''
+                    if res[j-1].face_index == face:
+                        vec0 = res[j-1].bary
+                    else:
+
+                        vec0 = bary(res[j-1].coord3d, A, B, C)
+                    # Now the second point...
+                    if res[j].face_index == face:
+                        vec1 = res[j].bary
+                    else:
+                        vec1 = bary(res[j].coord3d, A, B, C)
+                    '''
                     bary = (vec0 * (1 - ratio) + vec1 * ratio)
 
                     #print('These are the barycentric coordinates', bary)
@@ -228,7 +240,7 @@ def subdivideSegments(
                 if j != len(cartesianCoords) - 1:
                     newSegmentPoints[-1].append(segmentPoints[j])
 
-            #print(len(newSegmentPoints), divisionNum)
+            print(len(newSegmentPoints), divisionNum)
 
             assert len(newSegmentPoints) == divisionNum
             assert len(newSurfacePoints) == divisionNum - 1
@@ -268,64 +280,13 @@ def subdivideSegments(
 
 
 def remesh_curve_on_surface(tri_mesh, meshlib_mesh, nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode, h, solver, dictionary):
-    
-
-    newNodes = nodes
-    newSegments = segments
-    newSegmentSurfacePoints = segmentSurfacePoints
-    newSegmentLengths = segmentLengths
-    newIsFixedNode = isFixedNode
-    '''
-    newNodes = [sp.copy() for sp in nodes]
-    newSegments = copy.deepcopy(segments)
-    newSegmentSurfacePoints = [[sp.copy() for sp in surface_point_list] for surface_point_list in segmentSurfacePoints]
-    newSegmentLengths = copy.deepcopy(segmentLengths)
-    newIsFixedNode = copy.deepcopy(isFixedNode)
-    '''
 
     assert len(segmentLengths) == len(segments)
     assert len(segmentSurfacePoints) == len(segments)
     assert len(isFixedNode) == len(nodes)
 
-    _newNodes, _newSegments, _newSegmentSurfacePoints, _newSegmentLengths, _newNodeIsFixed = removeShortEdges(tri_mesh, meshlib_mesh, newNodes, newSegments, newSegmentSurfacePoints, newSegmentLengths, newIsFixedNode, h, solver, dictionary)
-    
-    #print('After removeShortEdges, these are the segments:',_newSegments)
-    '''
-    print(
-    f"_newNodes ({len(_newNodes)} elements): {_newNodes}\n"
-    f"_newSegments ({len(_newSegments)} elements): {_newSegments}\n"
-    f"_newSegmentSurfacePoints ({len(_newSegmentSurfacePoints)} elements): {_newSegmentSurfacePoints}\n"
-    f"_newSegmentLengths ({len(_newSegmentLengths)} elements): {_newSegmentLengths}\n"
-    f"_newNodeIsFixed ({len(_newNodeIsFixed)} elements): {_newNodeIsFixed}")
-    #
-    
-    # ---------------FOR DEBUGGIING---------------
-    polylines = []
-    find_connected_chains(_newSegments, polylines)
-    print('Just after removeShortEdges polylines looks now like this:')
-    print(len(polylines))
-    # ---------------FOR DEBUGGIING---------------
-    '''
- 
+    _newNodes, _newSegments, _newSegmentSurfacePoints, _newSegmentLengths, _newNodeIsFixed = removeShortEdges(tri_mesh, meshlib_mesh, nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode, h, solver, dictionary)
 
-    newNodes, newSegments, newSegmentSurfacePoints, newSegmentLengths, newNodeIsFixed = subdivideSegments(tri_mesh, _newNodes, _newSegments, _newSegmentSurfacePoints, _newSegmentLengths, _newNodeIsFixed, h)
-    '''
-    # ---------------FOR DEBUGGIING---------------
-    polylines = []
-    find_connected_chains(newSegments, polylines)
-    print('Just after subdivideSegments newSegments looks now like this:')
-    print(len(polylines))
-    # ---------------FOR DEBUGGIING---------------
-        # ---------------FOR DEBUGGIING---------------
-    polylines = []
-    find_connected_chains(_newSegments, polylines)
-    print('Just after subdivideSegments _newSegments, the input to the function looks like this:')
-    print(len(polylines))
-    # ---------------FOR DEBUGGIING---------------
-    '''
 
-    #print('After subdivieSegments:', newSegments)
-    if len(newNodes) < 3 or len(newSegments) < 3:
-        return nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode
-
-    return newNodes, newSegments, newSegmentSurfacePoints, newSegmentLengths, newNodeIsFixed
+    print('RIGHT NOW you are running the modified remeshing of the curve')
+    return _newNodes, _newSegments, _newSegmentSurfacePoints, _newSegmentLengths, _newNodeIsFixed

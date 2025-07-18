@@ -8,6 +8,9 @@ def perpendicular_vector(v):
     sz = z + np.copysign(s, z)
     return np.array([sz*z - x*x, -x*y, -x*sz])
 
+
+
+
 def surface_point_tangent_basis(tri_mesh, sp):
 
     type = sp.type

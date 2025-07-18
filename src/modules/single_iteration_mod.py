@@ -1,24 +1,33 @@
+import math
+import numpy as np
+
 from surface_filling_energy_geodesic_mod import surface_filling_energy_geodesic
 from surface_path_evolution_mod import surface_path_evolution
-from check_intersection_mod import check_intersection
-import math
 
-def doWork(
+def single_iteration(
     nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode,
-    tri_mesh, meshlib_mesh, solver, tracer,
+    tri_mesh, meshlib_mesh, solver, tracer, dictionary,
     vectorField,
-    maxRadius, radius,
+    maxRadius, radius, h, 
     useAnisotropicAlphaOnNodes, useAnisotropicAlphaOnMesh,
     alphaRatioOnNodes, alphaRatioOnMesh,
     w_fieldAlignedness, w_curvatureAlignedness, w_biharmonic,
     p, q
 ):
     
+    tol=1e-6
     cartesianCoords = [sp.coord3d for sp in nodes]
-    
+
+    #if h <= tol:
+    #    h = math.pi * radius / 25 # h is the boundary value: segments with length < h need to be "collapsed"
+
     h = math.pi * radius / 25 # h is the boundary value: segments with length < h need to be "collapsed"
 
-    d, g, f, medialAxis = surface_filling_energy_geodesic(
+    if maxRadius <= tol:
+        maxRadius = radius * 10
+
+    
+    d, g, f, medialAxis, DEBUG = surface_filling_energy_geodesic(
         nodes,
         cartesianCoords,
         segments,
@@ -26,6 +35,7 @@ def doWork(
         segmentLengths,
         isFixedNode,
         tri_mesh,
+        tracer,
         maxRadius,
         radius,
         useAnisotropicAlphaOnNodes,
@@ -38,13 +48,11 @@ def doWork(
         w_biharmonic,
         p,
         q
-        )
-
-    #print ('This is the direction:',d)
-
+    )
     
-    '''
-    nodes, segments, segmentSurfacePoints, segmentLengths, isFixedNode, retractionPaths = surface_path_evolution(
+    
+
+    new_nodes, new_segments, new_segmentSurfacePoints, new_segmentLengths, new_isFixedNode, retractionPaths = surface_path_evolution(
         tri_mesh,
         meshlib_mesh,
         nodes,
@@ -55,23 +63,11 @@ def doWork(
         h,
         d,
         tracer,
-        solver
+        solver, 
+        dictionary
     )
-
-    
-    return {
-        "nodes": nodes,
-        "segments": segments,
-        "segmentSurfacePoints": segmentSurfacePoints,
-        "segmentLengths": segmentLengths,
-        "isFixedNode": isFixedNode,
-        "retractionPaths": retractionPaths,
-        "descentDirection": d,
-        "gradient": g,
-        "energy": f,
-        "medialAxis": medialAxis
-    }
-    '''
     
 
-    return d, g, f, medialAxis
+    
+    return new_nodes, new_segments, new_segmentSurfacePoints, new_segmentLengths, new_isFixedNode, retractionPaths, d, g, f, medialAxis, DEBUG
+

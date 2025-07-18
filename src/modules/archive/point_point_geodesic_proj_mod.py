@@ -45,7 +45,10 @@ def point_point_geodesic(
         tri_mesh, meshlib_mesh, point1, point2, solver, dictionary):
 
     if sharedFace(point1, point2, tri_mesh) != -1:
-        return [point1, point2]
+        #print("[CASE] Points are subset of each other's face vertices — directly using Euclidean distance")
+        euclidean_dist = norm(point1.coord3d - point2.coord3d)
+        #print(f"[INFO] Geodesic length: {euclidean_dist}")
+        return [point1, point2], euclidean_dist
 
     adjacency = tri_mesh.face_adjacency
     adjacent_faces = adjacency[(adjacency == point1.face_index).any(axis=1)]
@@ -107,8 +110,9 @@ def point_point_geodesic(
 
         midpoint_coord = (1 - ratio) * v0 + ratio * v1
         midpoint = SurfacePoint.from_position(midpoint_coord.tolist(), tri_mesh)
+        geodesic_length = norm(point1.coord3d - midpoint.coord3d) + norm(midpoint.coord3d - point2.coord3d)
         #print(f"[INFO] Geodesic length: {geodesic_length}")
-        return [point1, midpoint, point2]
+        return [point1, midpoint, point2], geodesic_length
 
     else:
        # print("[CASE] Non-adjacent case — using meshlib.")
@@ -123,71 +127,31 @@ def point_point_geodesic(
             #print('The output type of meshlibs computeGeodesicPath is:',type(e))
         path = [point1]
 
-        tp = meshlib_mesh.topology
 
-        for ep in path_middle:
+
+            
+
+        # The method with projection:
+
+        for i in range(path_middle.__len__()):
+            ep = path_middle.__getitem__(i)
+
 
             #print('The output type of meshlibs computeGeodesicPath is still:',type(ep))
             
-            
-            # Topologically this could maybe be defined like this:
-            #v0_idx = ep.getClosestVertex(meshlib_mesh.topology).get
-            #v0 = tri_mesh.vertices[v0_idx]
-
-            
-            
-            v = ep.inVertex(tp)
-            if v.valid():
-                #print("Edge Point is in vertex: ", v,sep="")
-                vertex_index = dictionary[v.get()]
-
-                faces_indices = tri_mesh.vertex_faces[vertex_index]
-                faces_indices = [f for f in faces_indices if f != -1]
-
-                face_index = min(faces_indices)
-                face_vertices_indices = tri_mesh.faces[face_index]
-                x = np.where(face_vertices_indices == vertex_index)[0]
-
-                bary = np.zeros(3)
-                bary[x] = 1.0
-                
-                sp = SurfacePoint.from_barycentric(face_vertices_indices, face_index, bary, tri_mesh, tolerance=1e-6)
-
-
-            else:
-                #print("Edge Point is on Edge: ", ep.e,"  From: ",tp.org(ep.e),"->",tp.dest(ep.e)," at [0:1]:",ep.a)
-
-                vertex_index0 = dictionary[tp.org(ep.e).get()]
-                vertex_index1 = dictionary[tp.dest(ep.e).get()]
-
-                t = ep.a.a
-
-                #print('The type is :',type(t))
-
-                faces_indices0 = tri_mesh.vertex_faces[vertex_index0]
-                faces_indices0 = [f for f in faces_indices0 if f != -1]
-                
-                faces_indices1 = tri_mesh.vertex_faces[vertex_index1]
-                faces_indices1 = [f for f in faces_indices1 if f != -1]
-
-                face_index = min(set(faces_indices0).intersection(faces_indices1))
-                face_vertices_indices = tri_mesh.faces[face_index]
-
-                bary = np.zeros(3)
-
-                for j in range(3):
-                    if face_vertices_indices[j] == vertex_index0:
-                        bary[j] = 1-t
-                    elif face_vertices_indices[j] == vertex_index1:
-                        bary[j] = t
-
-                sp = SurfacePoint.from_barycentric(face_vertices_indices, face_index, bary, tri_mesh, tolerance=1e-6)
-
+            vec3f = meshlib_mesh.edgePoint(ep)
+            sp = SurfacePoint.from_position([vec3f[0], vec3f[1], vec3f[2]], tri_mesh)
             path.append(sp)
+        
 
+
+        #!!!!!!!!!!!!!!!! THIS MIGHT BE VERY WRONG!!!!!!!!!
         path.append(point2)
 
-        #print([type(p) for p in path])
+        geodesic_length = 0.0
+        for i in range(len(path) - 1):
+            segment_len = norm(np.array(path[i].coord3d) - np.array(path[i + 1].coord3d))
+            geodesic_length += segment_len
 
         #print(f"[INFO] Geodesic length: {geodesic_length}")
-        return path
+        return path, geodesic_length

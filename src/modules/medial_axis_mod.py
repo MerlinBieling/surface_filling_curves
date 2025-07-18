@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial import KDTree
+import trimesh.triangles as tri
 
 from SurfacePoint_mod import SurfacePoint
 from get_tangent_basis_mod import get_tangent_basis
@@ -20,40 +21,6 @@ from sharedFace_mod import sharedFace
 # We need this in the formulation of our Medial-Axis Energy term. 
 ###########################################################################
 
-def bary(P, A, B, C):
-    """
-    Compute barycentric coordinates (u, v, w) for point P with respect to triangle ABC.
-    
-    Parameters:
-        P, A, B, C: numpy arrays or lists of shape (3,) representing 3D coordinates.
-
-    Returns:
-        (u, v, w): tuple of barycentric coordinates such that P = u*A + v*B + w*C and u+v+w = 1
-    """
-    A = np.array(A)
-    B = np.array(B)
-    C = np.array(C)
-    P = np.array(P)
-
-    v0 = B - A
-    v1 = C - A
-    v2 = P - A
-
-    d00 = np.dot(v0, v0)
-    d01 = np.dot(v0, v1)
-    d11 = np.dot(v1, v1)
-    d20 = np.dot(v2, v0)
-    d21 = np.dot(v2, v1)
-
-    denom = d00 * d11 - d01 * d01
-    if denom == 0:
-        raise ValueError("The triangle is degenerate.")
-
-    v = (d11 * d20 - d01 * d21) / denom
-    w = (d00 * d21 - d01 * d20) / denom
-    u = 1.0 - v - w
-
-    return (u, v, w)
 
 
 # === Maximum Euclidean Ball Radius ===
@@ -73,8 +40,6 @@ def maximumBallRadius(x, b, i, maxRadius, cartesianCoords, kdtree):
         raise TypeError(f"cartesianCoords must be a numpy array of shape (N, 3), got {type(cartesianCoords)} with shape {getattr(cartesianCoords, 'shape', None)}")
     if not isinstance(kdtree, KDTree):
         raise TypeError(f"kdtree must be an instance of scipy.spatial.cKDTree, got {type(kdtree)}")
-
-    
 
     r = maxRadius
     #print(x,r,b)
@@ -118,22 +83,23 @@ def maximumBallRadius(x, b, i, maxRadius, cartesianCoords, kdtree):
 
 # === Trace Paths ===
 
-def tracePath(tri_mesh, surfacepoint, d, length, tracer):
+def tracePath(tri_mesh, meshlib_mesh, surfacepoint, d, length, tracer, solver, dictionary):
     x, y, _ = get_tangent_basis(tri_mesh, surfacepoint)
     traceVec = np.array([np.dot(d, x), np.dot(d, y)])
 
     # tracer object should include config for maxIters etc., assumed to be passed separately
-    res = trace_geodesic(tri_mesh, surfacepoint, traceVec, tracer, tol=1e-8)
+    res = trace_geodesic(tri_mesh, meshlib_mesh, surfacepoint, traceVec, tracer, solver, dictionary, tol = 1e-6, use_point_point_geodesic = True)
 
     return res
 
 
 def isIdenticalSurfacePoint(p1, p2):
-    return np.allclose(p1.coord3d, p2.coord3d, atol=1e-6)
+    return np.allclose(p1.coord3d, p2.coord3d, tol=1e-6)
 
 import numpy as np
 
-def cutTracePath(tri_mesh, path, cartesianPath, _length):
+
+def cutTracePath(tri_mesh, path, cartesianPath, r): # THIS IS NOT USED YET!!!
     #path must contain SurfacePoint instances
     # cartesianPath must contain their cartesian coordinates
 
@@ -148,28 +114,25 @@ def cutTracePath(tri_mesh, path, cartesianPath, _length):
 
         tracePath.append(path[j - 1])
 
-        if length > _length:
-            ratio = (_length - (length - currentEdgeLen)) / currentEdgeLen
+        if length > r:
+            ratio = (r - (length - currentEdgeLen)) / currentEdgeLen
 
-            face = sharedFace(path[j - 1], path[j], tri_mesh)
+            face_index = sharedFace(path[j - 1], path[j], tri_mesh)
+            assert face_index != -1, "Points do not share a face"
 
-            A, B, C = [tri_mesh.vertices[i] for i in tri_mesh.faces[face]]
+            # determining the barycentric coordinates of the two points with regard to the face
 
-            if path[j - 1].face_index == face:
-                vec0 = path[j-1].bary
-            else:
-                vec0 = bary(path[j-1].coord3d, A, B, C)
-
-            # Now the second point...
-
-            if path[j].face_index == face:
-                vec1 = path[j].bary
-            else:
-                vec1 = bary(path[j].coord3d, A, B, C)
+            #A, B, C = [tri_mesh.vertices[tri_mesh.faces[face_index]] for i in tri_mesh.faces[face_index]]¨
+            face_vertices_indices = tri_mesh.faces[face_index]
+            triangle = tri_mesh.vertices[face_vertices_indices]
+            vec0, vec1 = tri.points_to_barycentric(np.array([triangle, triangle]), np.array([path[j - 1].coord3d, path[j].coord3d]), method='cross')
+            #print('Did this bary calculation go well?:')
 
             bary = (vec0 * (1 - ratio) + vec1 * ratio)
-            nsp = SurfacePoint.from_barycentric(face, bary, tri_mesh, tolerance=1e-6)
-            #print(nsp)
+
+            #print('These are the barycentric coordinates', bary)
+
+            nsp = SurfacePoint.from_barycentric(face_vertices_indices, face_index, bary, tri_mesh, tolerance=1e-6)
 
             tracePath.append(nsp)
             break
@@ -182,44 +145,149 @@ def cutTracePath(tri_mesh, path, cartesianPath, _length):
 
 # THIS DOES NOT WORK YET!!!!
 '''
-def maximumGeodesicBallRadius(tri_mesh, surfacepoint, nodes, b, i, maxRadius, tracer):
+def maximumGeodesicBallRadius(tri_mesh, node, b, i, maxRadius, tracer, distance_map):
 
-    r = maxRadius
-    wholePath = tracePath(tri_mesh, surfacepoint, b, r, tracer)
+
+    param = 2
+
+    x, y, _ = get_tangent_basis(tri_mesh, node)
+    traceVec = np.array([np.dot(b, x), np.dot(b, y)])
+
+
+    wholePath = tracePath(tri_mesh, meshlib_mesh, surfacepoint, d, length, tracer, solver, dictionary)
+
+    cartesianPath = [sp.coord3d for sp in wholePath]
 
     cartesianCoords = [sp.coord3d for sp in wholePath]
 
+    last_sp = wholePath[-1]
+
+    vertex_idx = tri_mesh._pq.vertex(last_sp.coord3d)[1][0]
+
+    v0 = tri_mesh.vertices(last_sp.face_indices[0])
+    v1 = tri_mesh.vertices(last_sp.face_indices[1])
+
+    edge_len = abs(v0 - v1)
+
+    finished = abs(distance_map[vertex_idx] - np.linalg.norm(traceVec)) < param * edge_len
+
     
-
-   # p = mmp.traceBack(wholePath[-1])
-    finished = isIdenticalSurfacePoint(p[-1], x)
-
-    bsMax, bsMin = 1.0, 0.0
+    bsMax = 1.0
+    bsMin = 0.0
     itrc = 0
 
     while not finished:
         itrc += 1
         r = maxRadius * (bsMax + bsMin) / 2.0
 
-        path = cutTracePath(tri_mesh, wholePath, cartesianCoords, r)
-        #p = mmp.traceBack(path[-1])[-1]
+        path = cutTracePath(tri_mesh, wholePath, cartesianPath, r)
+        c = x + r * b
 
-        if isIdenticalSurfacePoint(p, surfacepoint):
-            bsMin = (bsMax + bsMin) / 2.0
+        vertex_idx = tri_mesh._pq.vertex(path[-1].coord3d)[1][0]
+
+        finished = abs(distance_map[vertex_idx] - np.linalg.norm(traceVec)) < param * edge_len
+
+        if finished:
+            bsMin = (bsMax + bsMin) / 2
         else:
-            bsMax = (bsMax + bsMin) / 2.0
+            bsMax = (bsMax + bsMin) / 2
 
         if itrc > 10:
             break
 
+
     return r
-'''
+
 # THIS DOES NOT WORK YET!!!!
 
 
+
+def medial_axis_geodesic(tri_mesh, nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius, tracer):
+   
+    heat = tri_mesh.heat
+
+    source_points = []
+    bool_flags = []
+
+    pp3d_edges_index_map = tri_mesh.pp3d_edges_index_map
+
+    for node in nodes:
+        type = node.type
+        top_indices = node.top_indices
+        face_index = node.face_index
+        bary = node.bary
+
+        bool_flags.append(False)
+
+        if type == 'vertex':
+            point_data = [(top_indices[0],[])]
+        elif type == 'edge':
+            _t, v_idx = node.t
+            if v_idx == sorted(top_indices)[0]:
+                t = _t # THIS IS A TEST AND WILL LIKELY BE WRONG!!!!!!!!!!
+            else:
+                t = 1 - _t 
+            point_data = [(int(pp3d_edges_index_map.get(tuple(sorted(top_indices)))),[float(t)])]
+        else:
+            point_data = [(int(face_index), [float(x) for x in bary])]
+
+        print(type)
+        print(point_data)
+
+        def validate(point_data):
+            if not (isinstance(point_data, list) and
+                    all(isinstance(p, tuple) and len(p)==2 and
+                        isinstance(p[0], int) and
+                        isinstance(p[1], list) and
+                        all(isinstance(x, float) for x in p[1])
+                        for p in point_data)):
+                raise TypeError("point_data must be list[tuple[int, list[float]]]")
+            return point_data
+        
+        validate(point_data)
+
+        
+        source_points.append(point_data)
+
+
+
+    print('These are the source points',source_points)
+
+    distance_map = heat.compute_distance(source_points, [False for _ in source_points])
+
+    nodeMedialAxis = [[] for _ in range(len(nodes))]
+
+    for i in range(len(nodes)):
+        t = nodeTangents[i]
+        n = nodeNormals[i]
+        x = np.asarray(cartesianCoords[i], dtype=float)
+        #b = np.asarray(nodeBitangents[i], dtype=float)
+
+        node = nodes[i]
+
+        b = nodeBitangents[i]
+
+        #print(b)
+
+        #print('These are the variables:',x, b, i, maxRadius, cartesianCoords, kdtree)
+
+
+        r_min_plus = min(maximumGeodesicBallRadius(node, b, i, maxRadius, cartesianCoords, tracer, distance_map), maxRadius)
+        r_min_minus = min(maximumGeodesicBallRadius(node, -b, i, maxRadius, cartesianCoords, tracer, distance_map), maxRadius)
+
+        medial_minus = x - r_min_minus * b
+        medial_plus = x + r_min_plus * b
+
+        nodeMedialAxis[i].append(medial_minus)
+        nodeMedialAxis[i].append(medial_plus)
+
+    return nodeMedialAxis
+
+'''
+
 # === Euclidean Medial Axis ===
 def medial_axis_euclidean(nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius):
-    point_array = np.vstack(cartesianCoords)
+    point_array = np.stack(cartesianCoords)
     kdtree = KDTree(point_array)
 
     nodeMedialAxis = [[] for _ in range(len(nodes))]
@@ -232,6 +300,10 @@ def medial_axis_euclidean(nodes, cartesianCoords, nodeTangents, nodeNormals, nod
 
         b = nodeBitangents[i]
 
+        #print(b)
+
+        #print('These are the variables:',x, b, i, maxRadius, cartesianCoords, kdtree)
+
 
         r_min_plus = min(maximumBallRadius(x, b, i, maxRadius, cartesianCoords, kdtree), maxRadius)
         r_min_minus = min(maximumBallRadius(x, -b, i, maxRadius, cartesianCoords, kdtree), maxRadius)
@@ -243,10 +315,13 @@ def medial_axis_euclidean(nodes, cartesianCoords, nodeTangents, nodeNormals, nod
         nodeMedialAxis[i].append(medial_plus)
 
     return nodeMedialAxis # output is list of NumPy arrays of shape (3,)
+        
+        
+
 
 # === Dispatcher Function ===
-def medial_axis(nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius, isGeodesic=False):
+def medial_axis(tri_mesh, nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius, tracer, isGeodesic):
     if isGeodesic:
-        raise NotImplementedError("Geodesic version not implemented in this translation")
+        return 'This still doesnt work yet'#medial_axis_geodesic(tri_mesh, nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius, tracer)
     else:
         return medial_axis_euclidean(nodes, cartesianCoords, nodeTangents, nodeNormals, nodeBitangents, maxRadius)
